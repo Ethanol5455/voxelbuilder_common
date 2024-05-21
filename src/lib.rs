@@ -1,8 +1,11 @@
 use cgmath::Vector3;
+use items::ItemManager;
 use serde::{Deserialize, Serialize};
 
+pub mod items;
 pub mod packets;
-pub use packets::*;
+
+const CHUNK_WIDTH: u8 = 16;
 
 #[derive(Serialize, Deserialize)]
 pub struct CompressedSet {
@@ -58,7 +61,7 @@ impl Chunk {
     }
 
     pub fn xyz_to_i(x: u8, y: u8, z: u8) -> u16 {
-        256 * z as u16 + 16 * y as u16 + x as u16
+        (CHUNK_WIDTH as u16).pow(2) * z as u16 + (CHUNK_WIDTH as u16) * y as u16 + x as u16
     }
 
     /// Sets the block at position `i` to `id`
@@ -105,41 +108,381 @@ impl Chunk {
         set
     }
 
-    pub fn build_mesh(&mut self) {
+    pub fn build_mesh(&mut self, item_manger: &ItemManager) {
         self.vertices.clear();
         self.indices.clear();
 
-        // Bottom Left
-        self.vertices.push(QuadVertex {
-            position: [0.0, 0.0, 0.0],
-            tex_coords: [0.0, 1.0],
-        });
-        let bl_index = self.vertices.len() as u32 - 1;
-        // Bottom Right
-        self.vertices.push(QuadVertex {
-            position: [1.0, 0.0, 0.0],
-            tex_coords: [1.0, 1.0],
-        });
-        let br_index = self.vertices.len() as u32 - 1;
-        // Top Right
-        self.vertices.push(QuadVertex {
-            position: [1.0, 1.0, 0.0],
-            tex_coords: [1.0, 0.0],
-        });
-        let tr_index = self.vertices.len() as u32 - 1;
-        // Top Left
-        self.vertices.push(QuadVertex {
-            position: [0.0, 1.0, 0.0],
-            tex_coords: [0.0, 0.0],
-        });
-        let tl_index = self.vertices.len() as u32 - 1;
+        for z in 0..CHUNK_WIDTH {
+            for y in 0..CHUNK_WIDTH {
+                for x in 0..CHUNK_WIDTH {
+                    let block_offset = Vector3::new(x as f32, y as f32, z as f32);
+                    let block_id = self.blocks[Self::xyz_to_i(x, y, z) as usize];
+                    let block_info = match item_manger.get_item_by_id(block_id) {
+                        Some(item_info) => item_info,
+                        None => {
+                            eprintln!(
+                                "WARNING: Chunk::build_mesh was unable to get item info for id {}",
+                                block_id
+                            );
+                            continue;
+                        }
+                    };
 
-        self.indices.push(bl_index);
-        self.indices.push(br_index);
-        self.indices.push(tl_index);
+                    if block_info.is_transparent {
+                        continue;
+                    }
 
-        self.indices.push(tr_index);
-        self.indices.push(tl_index);
-        self.indices.push(br_index);
+                    let render_right_face = if z != 15 {
+                        item_manger
+                            .is_transparent(self.blocks[Self::xyz_to_i(x, y, z + 1) as usize])
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+                    let render_left_face = if z != 0 {
+                        item_manger
+                            .is_transparent(self.blocks[Self::xyz_to_i(x, y, z - 1) as usize])
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+                    let render_front_face = if x != 0 {
+                        item_manger
+                            .is_transparent(self.blocks[Self::xyz_to_i(x - 1, y, z) as usize])
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+                    let render_back_face = if x != 15 {
+                        item_manger
+                            .is_transparent(self.blocks[Self::xyz_to_i(x + 1, y, z) as usize])
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+                    let render_bottom_face = if y != 0 {
+                        item_manger
+                            .is_transparent(self.blocks[Self::xyz_to_i(x, y - 1, z) as usize])
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+                    let render_top_face = if y != 15 {
+                        item_manger
+                            .is_transparent(self.blocks[Self::xyz_to_i(x, y + 1, z) as usize])
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+
+                    // Right Face
+                    if render_right_face {
+                        // Bottom Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.bl.into(),
+                        });
+                        let bl_index = self.vertices.len() as u32 - 1;
+                        // Bottom Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.br.into(),
+                        });
+                        let br_index = self.vertices.len() as u32 - 1;
+                        // Top Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.tr.into(),
+                        });
+                        let tr_index = self.vertices.len() as u32 - 1;
+                        // Top Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.tl.into(),
+                        });
+                        let tl_index = self.vertices.len() as u32 - 1;
+
+                        self.indices.push(bl_index);
+                        self.indices.push(br_index);
+                        self.indices.push(tl_index);
+
+                        self.indices.push(tr_index);
+                        self.indices.push(tl_index);
+                        self.indices.push(br_index);
+                    }
+                    // Left Face
+                    if render_left_face {
+                        // Bottom Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.bl.into(),
+                        });
+                        let bl_index = self.vertices.len() as u32 - 1;
+                        // Bottom Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.br.into(),
+                        });
+                        let br_index = self.vertices.len() as u32 - 1;
+                        // Top Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.tr.into(),
+                        });
+                        let tr_index = self.vertices.len() as u32 - 1;
+                        // Top Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.tl.into(),
+                        });
+                        let tl_index = self.vertices.len() as u32 - 1;
+
+                        self.indices.push(tl_index);
+                        self.indices.push(br_index);
+                        self.indices.push(bl_index);
+
+                        self.indices.push(br_index);
+                        self.indices.push(tl_index);
+                        self.indices.push(tr_index);
+                    }
+                    // Front Face
+                    if render_front_face {
+                        // Bottom Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.bl.into(),
+                        });
+                        let bl_index = self.vertices.len() as u32 - 1;
+                        // Bottom Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.br.into(),
+                        });
+                        let br_index = self.vertices.len() as u32 - 1;
+                        // Top Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.tr.into(),
+                        });
+                        let tr_index = self.vertices.len() as u32 - 1;
+                        // Top Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.tl.into(),
+                        });
+                        let tl_index = self.vertices.len() as u32 - 1;
+
+                        self.indices.push(bl_index);
+                        self.indices.push(br_index);
+                        self.indices.push(tl_index);
+
+                        self.indices.push(tr_index);
+                        self.indices.push(tl_index);
+                        self.indices.push(br_index);
+                    }
+                    // Back Face
+                    if render_back_face {
+                        // Bottom Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.bl.into(),
+                        });
+                        let bl_index = self.vertices.len() as u32 - 1;
+                        // Bottom Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.br.into(),
+                        });
+                        let br_index = self.vertices.len() as u32 - 1;
+                        // Top Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.tr.into(),
+                        });
+                        let tr_index = self.vertices.len() as u32 - 1;
+                        // Top Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.side_tex_coords.tl.into(),
+                        });
+                        let tl_index = self.vertices.len() as u32 - 1;
+
+                        self.indices.push(tl_index);
+                        self.indices.push(br_index);
+                        self.indices.push(bl_index);
+
+                        self.indices.push(br_index);
+                        self.indices.push(tl_index);
+                        self.indices.push(tr_index);
+                    }
+                    // Bottom Face
+                    if render_bottom_face {
+                        // Bottom Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.bottom_tex_coords.bl.into(),
+                        });
+                        let bl_index = self.vertices.len() as u32 - 1;
+                        // Bottom Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.bottom_tex_coords.br.into(),
+                        });
+                        let br_index = self.vertices.len() as u32 - 1;
+                        // Top Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.bottom_tex_coords.tr.into(),
+                        });
+                        let tr_index = self.vertices.len() as u32 - 1;
+                        // Top Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 0.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.bottom_tex_coords.tl.into(),
+                        });
+                        let tl_index = self.vertices.len() as u32 - 1;
+
+                        self.indices.push(tl_index);
+                        self.indices.push(br_index);
+                        self.indices.push(bl_index);
+
+                        self.indices.push(br_index);
+                        self.indices.push(tl_index);
+                        self.indices.push(tr_index);
+                    }
+                    // Top Face
+                    if render_top_face {
+                        // Bottom Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.top_tex_coords.bl.into(),
+                        });
+                        let bl_index = self.vertices.len() as u32 - 1;
+                        // Bottom Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 1.0,
+                            ],
+                            tex_coords: block_info.top_tex_coords.br.into(),
+                        });
+                        let br_index = self.vertices.len() as u32 - 1;
+                        // Top Right
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 1.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.top_tex_coords.tr.into(),
+                        });
+                        let tr_index = self.vertices.len() as u32 - 1;
+                        // Top Left
+                        self.vertices.push(QuadVertex {
+                            position: [
+                                block_offset.x + 0.0,
+                                block_offset.y + 1.0,
+                                block_offset.z + 0.0,
+                            ],
+                            tex_coords: block_info.top_tex_coords.tl.into(),
+                        });
+                        let tl_index = self.vertices.len() as u32 - 1;
+
+                        self.indices.push(bl_index);
+                        self.indices.push(br_index);
+                        self.indices.push(tl_index);
+
+                        self.indices.push(tr_index);
+                        self.indices.push(tl_index);
+                        self.indices.push(br_index);
+                    }
+                }
+            }
+        }
     }
 }
